@@ -1,4 +1,4 @@
-FROM nginx:1.28-alpine
+FROM nginx:1.29-alpine
 
 LABEL org.opencontainers.image.source="https://github.com/rojosinalma/warp-beacon" \
       org.opencontainers.image.description="Cloudflare WARP managed-network beacon: HTTPS endpoint with one fixed self-signed certificate" \
