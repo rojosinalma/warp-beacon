@@ -1,0 +1,12 @@
+services:
+  warp-beacon:
+    image: ghcr.io/rojosinalma/warp-beacon:0.1.0
+    container_name: warp-beacon
+    restart: unless-stopped
+    ports:
+      - "${BEACON_BIND:-0.0.0.0}:${BEACON_PORT:-3333}:443"
+    environment:
+      BEACON_CN: ${BEACON_CN:-warp-beacon.internal}
+      CERT_DAYS: ${CERT_DAYS:-3650}
+    volumes:
+      - ./certs:/certs

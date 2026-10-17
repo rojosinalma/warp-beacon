@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Build the image, run a throwaway container and check that it answers 200 over HTTPS, that the
+# fingerprint it logs is the one it serves, and that a restart with the same cert dir keeps it.
+# Also runs shellcheck on the shell scripts when available (locally or via Docker).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+image="warp-beacon:verify"
+name="warp-beacon-verify-$$"
+tmp="$(mktemp -d)"
+fail=0
+
+cleanup() {
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+step() { printf '\n==> %s\n' "$*"; }
+ok()   { printf '    ok: %s\n' "$*"; }
+bad()  { printf '    FAIL: %s\n' "$*" >&2; fail=1; }
+# check <condition...> -- <ok message> <fail message>
+check() {
+  local cond=()
+  while [ "$1" != "--" ]; do cond+=("$1"); shift; done
+  shift
+  if "${cond[@]}"; then ok "$1"; else bad "$2"; fi
+}
+
+# --- shellcheck -----------------------------------------------------------------------------
+step "shellcheck"
+scripts=(entrypoint.sh bin/*)
+if command -v shellcheck >/dev/null 2>&1; then
+  check shellcheck "${scripts[@]}" -- "shellcheck (local)" "shellcheck"
+elif command -v docker >/dev/null 2>&1; then
+  check docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:stable "${scripts[@]}" \
+    -- "shellcheck (docker)" "shellcheck"
+else
+  echo "    skipped: neither shellcheck nor docker found"
+fi
+
+# --- build ----------------------------------------------------------------------------------
+step "build $image"
+if docker build -q -t "$image" . >/dev/null; then ok "built"; else bad "build"; exit 1; fi
+
+# --- run ------------------------------------------------------------------------------------
+chmod 0777 "$tmp"   # the entrypoint runs as root in the container; keep it simple for bind mounts
+
+run_container() {
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" -p 127.0.0.1::443 -v "$tmp:/certs" "$image" >/dev/null
+  port="$(docker port "$name" 443/tcp | head -n1 | sed 's/.*://')"
+}
+
+wait_ready() {
+  for _ in $(seq 1 30); do
+    if curl -ksS -o /dev/null "https://127.0.0.1:$port/" 2>/dev/null; then return 0; fi
+    sleep 0.5
+  done
+  echo "    container log:" >&2
+  docker logs "$name" >&2 || true
+  return 1
+}
+
+served_fingerprint() {
+  { openssl s_client -connect "127.0.0.1:$port" -servername beacon </dev/null 2>/dev/null || true; } \
+    | openssl x509 -noout -fingerprint -sha256 2>/dev/null | tr -d : | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
+}
+
+logged_fingerprint() {
+  { docker logs "$name" 2>&1 | grep -o 'SHA256 Fingerprint=[0-9A-F]*' || true; } | tail -n1 | sed 's/.*=//'
+}
+
+step "first start (generates certificate)"
+run_container
+if wait_ready; then
+  ok "ready on 127.0.0.1:$port"
+else
+  bad "container did not become ready"; exit 1
+fi
+
+code="$(curl -ksS -o /dev/null -w '%{http_code}' "https://127.0.0.1:$port/")"
+check [ "$code" = "200" ] -- "GET / -> 200" "GET / -> $code"
+
+fp1="$(served_fingerprint)"
+logged="$(logged_fingerprint)"
+check [ -n "$fp1" ] -- "served fingerprint $fp1" "no fingerprint served"
+check [ "$fp1" = "$logged" ] -- "matches logged fingerprint" "logged fingerprint '$logged' differs"
+
+if docker logs "$name" 2>&1 | grep -q '^\[cert\] generating'; then
+  ok "certificate generated on first start"
+else
+  bad "no generation log line on first start"
+fi
+
+step "restart with the same cert dir (idempotence)"
+run_container
+wait_ready || { bad "container did not become ready after restart"; exit 1; }
+fp2="$(served_fingerprint)"
+check [ "$fp1" = "$fp2" ] -- "fingerprint unchanged" "fingerprint changed: $fp1 -> $fp2"
+if docker logs "$name" 2>&1 | grep -q '^\[cert\] reusing'; then
+  ok "existing certificate reused"
+else
+  bad "no reuse log line on restart"
+fi
+
+step "healthcheck"
+healthy=0
+for _ in $(seq 1 40); do
+  status="$(docker inspect -f '{{.State.Health.Status}}' "$name")"
+  if [ "$status" = "healthy" ]; then healthy=1; break; fi
+  sleep 1
+done
+check [ "$healthy" = 1 ] -- "healthy" "health status: $status"
+
+printf '\n'
+if [ "$fail" = 0 ]; then
+  echo "all checks passed; fingerprint: $fp1"
+else
+  echo "some checks failed" >&2
+  exit 1
+fi

@@ -1,0 +1,8 @@
+.git
+.github
+certs
+.env*
+bin
+docs
+*.md
+compose*.yaml

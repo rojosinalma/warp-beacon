@@ -1,0 +1,20 @@
+# Rendered by entrypoint.sh (envsubst on LISTEN_PORT and CERT_DIR only).
+server {
+    listen ${LISTEN_PORT} ssl;
+    listen [::]:${LISTEN_PORT} ssl;
+    http2 on;
+
+    ssl_certificate     ${CERT_DIR}/cert.pem;
+    ssl_certificate_key ${CERT_DIR}/key.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:beacon:1m;
+    ssl_session_timeout 10m;
+
+    access_log off;
+    server_tokens off;
+
+    location / {
+        default_type text/plain;
+        return 200 'ok\n';
+    }
+}

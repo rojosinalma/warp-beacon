@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Print the SHA-256 fingerprint (uppercase, no colons) of the certificate served at host:port.
+# This is the value to enter as "TLS certificate SHA-256" for the managed network in Zero Trust.
+set -euo pipefail
+
+target="${1:-127.0.0.1:3333}"
+
+if [ "$target" = "-h" ] || [ "$target" = "--help" ]; then
+  echo "usage: bin/fingerprint [host:port]   (default 127.0.0.1:3333)"
+  exit 0
+fi
+
+cert="$(openssl s_client -connect "$target" -servername "${target%%:*}" </dev/null 2>/dev/null \
+  | openssl x509 2>/dev/null || true)"
+
+if [ -z "$cert" ]; then
+  echo "fingerprint: no TLS certificate received from $target" >&2
+  exit 1
+fi
+
+printf '%s\n' "$cert" | openssl x509 -noout -fingerprint -sha256 | tr -d : | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'

@@ -1,0 +1,10 @@
+.env
+certs/
+*.pem
+*.key
+*.crt
+compose.override.yaml
+.idea/
+.vscode/
+*.swp
+.DS_Store

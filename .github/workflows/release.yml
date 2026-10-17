@@ -1,0 +1,45 @@
+# Release stage: on tag v*, create the GitHub release with the matching CHANGELOG.md section as notes.
+name: release
+run-name: ${{ github.ref_name }} · ${{ github.event.head_commit.message || github.actor }}
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract changelog section
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG.md section for $version" >&2
+            exit 1
+          fi
+          {
+            echo
+            echo "Image: \`ghcr.io/${GITHUB_REPOSITORY}:${version}\` (linux/amd64, linux/arm64)."
+            echo
+            echo "Full changelog: [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)"
+          } >> notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
